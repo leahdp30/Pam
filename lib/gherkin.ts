@@ -5,6 +5,10 @@ import type { Section } from "@/types/analysis";
  * Template-based — no external AI required.
  */
 export function generateGherkin(section: Section): string {
+  if (section.id.startsWith("article-")) {
+    return gherkinArticleSection(section);
+  }
+
   switch (section.id) {
     case "navigation":
       return gherkinNavigation(section);
@@ -260,4 +264,38 @@ function gherkinGeneric(s: Section): string {
     `    Then an error message is displayed`,
     `    And the user can retry the action`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Article section template — maps extracted steps to Given / When / And / Then
+// ---------------------------------------------------------------------------
+
+function gherkinArticleSection(s: Section): string {
+  const workflow = s.workflows[0];
+  const steps = (workflow?.steps ?? []).filter(Boolean);
+
+  if (steps.length === 0) return gherkinGeneric(s);
+
+  const objective = s.objective.slice(0, 200);
+  const lines: string[] = [
+    `Feature: ${s.title}`,
+    `  # ${objective}`,
+    ``,
+    `  Scenario: ${workflow?.name ?? s.title}`,
+  ];
+
+  if (steps.length === 1) {
+    lines.push(`    Given ${steps[0]}`);
+  } else if (steps.length === 2) {
+    lines.push(`    Given ${steps[0]}`);
+    lines.push(`    Then ${steps[1]}`);
+  } else {
+    lines.push(`    Given ${steps[0]}`);
+    for (let i = 1; i < steps.length - 1; i++) {
+      lines.push(`    ${i === 1 ? "When" : "And"} ${steps[i]}`);
+    }
+    lines.push(`    Then ${steps[steps.length - 1]}`);
+  }
+
+  return lines.join("\n");
 }

@@ -1,6 +1,13 @@
 import * as cheerio from "cheerio";
 import type { Section, UIElement, Workflow, RebuildStep } from "@/types/analysis";
 
+interface ArticleSection {
+  heading: string;
+  steps: string[];    // items from <ol>
+  bullets: string[];  // items from <ul>
+  summary: string;    // first <p> text under this heading
+}
+
 interface ExtractedPage {
   title: string;
   headings: string[];
@@ -11,6 +18,8 @@ interface ExtractedPage {
   hasPasswordField: boolean;
   hasSearchField: boolean;
   hasEmailField: boolean;
+  articleSections: ArticleSection[];
+  isArticle: boolean;
 }
 
 export async function fetchAndParse(url: string): Promise<ExtractedPage> {
@@ -116,6 +125,83 @@ export function parseHtml(html: string): ExtractedPage {
     allInputTypes.includes("search") ||
     allInputNames.some((n) => n.includes("search") || n.includes("query") || n.includes("q"));
 
+  // ---------------------------------------------------------------------------
+  // Article section extraction
+  // ---------------------------------------------------------------------------
+
+  // Find the best content container (Wikipedia, semantic HTML, common CMS classes)
+  const contentSelectors = [
+    ".mw-parser-output",
+    "article",
+    '[role="main"]',
+    ".post-content",
+    ".entry-content",
+    ".article-content",
+    ".article-body",
+    "#article-body",
+    "#main-content",
+    "main",
+  ];
+
+  let containerSelector = "body";
+  for (const sel of contentSelectors) {
+    if ($(sel).first().length) {
+      containerSelector = sel;
+      break;
+    }
+  }
+
+  const skipHeadings = new Set([
+    "references", "notes", "see also", "external links",
+    "further reading", "bibliography", "footnotes", "citations",
+    "contents", "table of contents",
+  ]);
+
+  const articleSections: ArticleSection[] = [];
+
+  $(`${containerSelector} h2, ${containerSelector} h3`).each((_, heading) => {
+    const $h = $(heading);
+    // Wikipedia wraps heading text in <span class="mw-headline">
+    const rawText = $h.find(".mw-headline").text().trim() || $h.text().trim();
+    const headingText = rawText.replace(/\[\w+\]/g, "").trim();
+
+    if (!headingText || headingText.length > 100) return;
+    if (skipHeadings.has(headingText.toLowerCase())) return;
+
+    const steps: string[] = [];
+    const bullets: string[] = [];
+    let summary = "";
+
+    let $next = $h.next();
+    while ($next.length && !$next.is("h2, h3")) {
+      const tag = ($next[0] as { tagName?: string }).tagName?.toLowerCase();
+      if (tag === "ol") {
+        $next.find("> li").each((_, li) => {
+          const text = cleanArticleText($(li).text());
+          if (text) steps.push(text);
+        });
+      } else if (tag === "ul") {
+        $next.find("> li").each((_, li) => {
+          const text = cleanArticleText($(li).text());
+          if (text) bullets.push(text);
+        });
+      } else if (tag === "p" && !summary) {
+        summary = cleanArticleText($next.text()).slice(0, 300);
+      }
+      $next = $next.next();
+    }
+
+    if (steps.length > 0 || bullets.length > 1) {
+      articleSections.push({ heading: headingText, steps, bullets, summary });
+    }
+  });
+
+  const paragraphCount = $("p").length;
+  const isArticle =
+    $(".mw-parser-output").length > 0 ||
+    $("article").length > 0 ||
+    (paragraphCount > 5 && articleSections.length > 0);
+
   return {
     title: title.slice(0, 120),
     headings: dedupe(headings).slice(0, 20),
@@ -126,6 +212,8 @@ export function parseHtml(html: string): ExtractedPage {
     hasPasswordField,
     hasSearchField,
     hasEmailField,
+    articleSections,
+    isArticle,
   };
 }
 
@@ -133,11 +221,25 @@ function dedupe(arr: string[]): string[] {
   return [...new Set(arr.map((s) => s.trim()).filter(Boolean))];
 }
 
+function cleanArticleText(text: string): string {
+  return text
+    .replace(/\[\d+\]/g, "")   // strip citation markers [1], [2]
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200);
+}
+
 // ---------------------------------------------------------------------------
 // Section extraction
 // ---------------------------------------------------------------------------
 
 export function extractSections(page: ExtractedPage): Section[] {
+  // When the page has meaningful article content (2+ sections with steps),
+  // extract sections from the article structure instead of UI signals.
+  if (page.isArticle && page.articleSections.length >= 2) {
+    return extractArticleSections(page);
+  }
+
   const sections: Section[] = [];
 
   // Navigation section — always include if nav links exist or site has headings
@@ -190,6 +292,57 @@ function containsKeyword(arr: string[], keywords: string[]): boolean {
   return arr.some((item) =>
     keywords.some((kw) => item.toLowerCase().includes(kw))
   );
+}
+
+// ---------------------------------------------------------------------------
+// Article-based section extraction
+// ---------------------------------------------------------------------------
+
+function extractArticleSections(page: ExtractedPage): Section[] {
+  return page.articleSections.slice(0, 8).map((artSection, i) => {
+    const slugId =
+      "article-" +
+      artSection.heading
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 40);
+
+    // Prefer ordered steps; fall back to bullet points
+    const allSteps = artSection.steps.length > 0 ? artSection.steps : artSection.bullets;
+
+    const workflows: Workflow[] = [
+      {
+        name: artSection.heading,
+        actors: ["User"],
+        trigger: `User reads the "${artSection.heading}" section`,
+        steps: allSteps,
+        outcomes:
+          allSteps.length > 0
+            ? [allSteps[allSteps.length - 1]]
+            : ["The process described in this section is complete"],
+        edgeCases: [],
+      },
+    ];
+
+    return {
+      id: slugId,
+      title: artSection.heading,
+      objective:
+        artSection.summary ||
+        `Steps and information covered in the "${artSection.heading}" section`,
+      priority: (i === 0 ? "high" : "medium") as Section["priority"],
+      uiElements: [],
+      workflows,
+      dependencies: [],
+      acceptanceCriteria: allSteps.slice(0, 4).map((s) => s.slice(0, 120)),
+      rebuildProcedure: allSteps.map<RebuildStep>((s, j) => ({
+        order: j + 1,
+        instruction: s.slice(0, 200),
+      })),
+      gherkin: "",
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
