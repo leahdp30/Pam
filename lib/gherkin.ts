@@ -1,5 +1,7 @@
 import type { Section } from "@/types/analysis";
 
+const MAX_OBJECTIVE_LENGTH = 200;
+
 /**
  * Generates deterministic Gherkin feature text for a given section.
  * Template-based — no external AI required.
@@ -276,7 +278,7 @@ function gherkinArticleSection(s: Section): string {
 
   if (steps.length === 0) return gherkinGeneric(s);
 
-  const objective = s.objective.slice(0, 200);
+  const objective = s.objective.slice(0, MAX_OBJECTIVE_LENGTH);
   const lines: string[] = [
     `Feature: ${s.title}`,
     `  # ${objective}`,

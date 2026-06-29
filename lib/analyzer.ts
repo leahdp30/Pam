@@ -1,6 +1,16 @@
 import * as cheerio from "cheerio";
 import type { Section, UIElement, Workflow, RebuildStep } from "@/types/analysis";
 
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const MAX_HEADING_LENGTH = 100;
+const MAX_TEXT_LENGTH = 200;
+const MAX_SUMMARY_LENGTH = 300;
+const MAX_ARTICLE_SECTIONS = 8;
+const MIN_PARAGRAPH_COUNT_FOR_ARTICLE = 5;
+
 interface ArticleSection {
   heading: string;
   steps: string[];    // items from <ol>
@@ -165,7 +175,7 @@ export function parseHtml(html: string): ExtractedPage {
     const rawText = $h.find(".mw-headline").text().trim() || $h.text().trim();
     const headingText = rawText.replace(/\[\w+\]/g, "").trim();
 
-    if (!headingText || headingText.length > 100) return;
+    if (!headingText || headingText.length > MAX_HEADING_LENGTH) return;
     if (skipHeadings.has(headingText.toLowerCase())) return;
 
     const steps: string[] = [];
@@ -186,7 +196,7 @@ export function parseHtml(html: string): ExtractedPage {
           if (text) bullets.push(text);
         });
       } else if (tag === "p" && !summary) {
-        summary = cleanArticleText($next.text()).slice(0, 300);
+        summary = cleanArticleText($next.text()).slice(0, MAX_SUMMARY_LENGTH);
       }
       $next = $next.next();
     }
@@ -200,7 +210,7 @@ export function parseHtml(html: string): ExtractedPage {
   const isArticle =
     $(".mw-parser-output").length > 0 ||
     $("article").length > 0 ||
-    (paragraphCount > 5 && articleSections.length > 0);
+    (paragraphCount > MIN_PARAGRAPH_COUNT_FOR_ARTICLE && articleSections.length > 0);
 
   return {
     title: title.slice(0, 120),
@@ -226,7 +236,7 @@ function cleanArticleText(text: string): string {
     .replace(/\[\d+\]/g, "")   // strip citation markers [1], [2]
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 200);
+    .slice(0, MAX_TEXT_LENGTH);
 }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +309,7 @@ function containsKeyword(arr: string[], keywords: string[]): boolean {
 // ---------------------------------------------------------------------------
 
 function extractArticleSections(page: ExtractedPage): Section[] {
-  return page.articleSections.slice(0, 8).map((artSection, i) => {
+  return page.articleSections.slice(0, MAX_ARTICLE_SECTIONS).map((artSection, i) => {
     const slugId =
       "article-" +
       artSection.heading
@@ -338,7 +348,7 @@ function extractArticleSections(page: ExtractedPage): Section[] {
       acceptanceCriteria: allSteps.slice(0, 4).map((s) => s.slice(0, 120)),
       rebuildProcedure: allSteps.map<RebuildStep>((s, j) => ({
         order: j + 1,
-        instruction: s.slice(0, 200),
+        instruction: s.slice(0, MAX_TEXT_LENGTH),
       })),
       gherkin: "",
     };
