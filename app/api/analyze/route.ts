@@ -42,6 +42,15 @@ export async function POST(
     );
   }
 
+  // Block requests to private/loopback addresses to prevent SSRF
+  const hostname = parsedUrl.hostname.toLowerCase();
+  if (isPrivateHost(hostname)) {
+    return NextResponse.json(
+      { error: "Requests to private or loopback addresses are not allowed" },
+      { status: 400 },
+    );
+  }
+
   // Fetch and parse
   let page;
   try {
@@ -77,4 +86,43 @@ export async function POST(
 function buildSiteSummary(title: string, sectionTitles: string[]): string {
   const listed = sectionTitles.join(", ");
   return `"${title}" was analyzed and the following functional sections were identified: ${listed}.`;
+}
+
+/**
+ * Returns true when the hostname is a loopback address, private network range,
+ * link-local address, or any other internal destination that should not be
+ * reachable from a public-facing web application (SSRF guard).
+ */
+function isPrivateHost(hostname: string): boolean {
+  // Loopback / localhost
+  if (hostname === "localhost" || hostname === "0.0.0.0") return true;
+
+  // IPv6 loopback
+  if (hostname === "::1" || hostname === "[::1]") return true;
+
+  // Strip IPv6 brackets for further checks
+  const host = hostname.replace(/^\[|\]$/g, "");
+
+  // IPv4 private / reserved ranges
+  const ipv4Parts = host.split(".");
+  if (ipv4Parts.length === 4) {
+    const [a, b] = ipv4Parts.map(Number);
+    if (a === 10) return true;                          // 10.0.0.0/8
+    if (a === 172 && b >= 16 && b <= 31) return true;  // 172.16.0.0/12
+    if (a === 192 && b === 168) return true;            // 192.168.0.0/16
+    if (a === 127) return true;                         // 127.0.0.0/8
+    if (a === 169 && b === 254) return true;            // 169.254.0.0/16 link-local
+    if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 shared address
+    if (a === 0) return true;                           // 0.0.0.0/8
+    if (a === 192 && b === 0 && ipv4Parts[2] === "0") return true; // 192.0.0.0/24 IETF
+    if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 benchmarking
+    if (a === 203 && b === 0 && ipv4Parts[2] === "113") return true; // 203.0.113.0/24 documentation
+    if (a === 255) return true;                         // broadcast
+  }
+
+  // IPv6 private / link-local / unique-local
+  if (host.startsWith("fc") || host.startsWith("fd")) return true; // unique-local fc00::/7
+  if (host.startsWith("fe80")) return true;                         // link-local fe80::/10
+
+  return false;
 }

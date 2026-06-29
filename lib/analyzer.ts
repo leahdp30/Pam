@@ -23,7 +23,7 @@ export async function fetchAndParse(url: string): Promise<ExtractedPage> {
       signal: controller.signal,
       headers: {
         "User-Agent":
-          "Mozilla/5.0 (compatible; PamBot/1.0; +https://github.com/leahdp30/Pam)",
+          "Mozilla/5.0 (compatible; PAMBot/1.0; +https://github.com/leahdp30/Pam)",
       },
     });
     if (!response.ok) {
